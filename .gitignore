@@ -16,3 +16,7 @@
 # Go
 *.test
 *.out
+
+# Personal, machine-local memory (project-scoped). Shared memory is REASONIX.md.
+REASONIX.local.md
+AGENTS.local.md

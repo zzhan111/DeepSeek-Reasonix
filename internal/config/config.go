@@ -261,6 +261,17 @@ func CommandDirs() []string {
 	return dirs
 }
 
+// MemoryUserDir returns the reasonix user config root (…/reasonix), under which
+// the user-global REASONIX.md and the per-project auto-memory store live. Empty
+// when the user config dir can't be resolved, which disables user-scoped memory.
+func MemoryUserDir() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "reasonix")
+}
+
 // SourcePath returns the highest-priority config file that exists, or "" if none.
 func SourcePath() string {
 	if _, err := os.Stat("reasonix.toml"); err == nil {

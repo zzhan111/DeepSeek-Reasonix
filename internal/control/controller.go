@@ -13,6 +13,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"reasonix/internal/agent"
 	"reasonix/internal/command"
 	"reasonix/internal/event"
+	"reasonix/internal/memory"
 	"reasonix/internal/permission"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
@@ -38,6 +40,7 @@ type Controller struct {
 	sessionDir   string
 	host         *plugin.Host
 	commands     []command.Command
+	mem          *memory.Set
 	cleanup      func()
 
 	// promptMu serialises approval prompts so at most one is outstanding at a
@@ -56,6 +59,13 @@ type Controller struct {
 	approvals   map[string]chan approvalReply
 	granted     map[string]bool
 	nextID      int
+
+	// pendingMemory holds memory notes added mid-session (via "#" quick-add or a
+	// memory edit) that haven't yet been folded into a turn. Compose drains it
+	// onto the next outgoing turn — never into the cache-stable system prefix — so
+	// a fresh memory takes effect this session without busting the prompt cache;
+	// it joins the prefix naturally on the next session.
+	pendingMemory []string
 }
 
 type approvalReply struct {
@@ -77,6 +87,7 @@ type Options struct {
 	SessionPath  string
 	Host         *plugin.Host
 	Commands     []command.Command
+	Memory       *memory.Set
 	Cleanup      func()
 }
 
@@ -97,6 +108,7 @@ func New(opts Options) *Controller {
 		sessionPath:  opts.SessionPath,
 		host:         opts.Host,
 		commands:     opts.Commands,
+		mem:          opts.Memory,
 		cleanup:      opts.Cleanup,
 		approvals:    map[string]chan approvalReply{},
 		granted:      map[string]bool{},
@@ -166,6 +178,20 @@ func (c *Controller) Submit(input string) {
 				c.notice("new session")
 			}
 		}()
+	case strings.HasPrefix(trimmed, "#"):
+		// "#<note>" quick-adds a memory line — same shortcut as the chat TUI, so
+		// the desktop and HTTP frontends (which route raw input through Submit)
+		// get it for free. It never starts a model turn.
+		note := strings.TrimSpace(trimmed[1:])
+		if note == "" {
+			c.notice("nothing to remember")
+			return
+		}
+		if path, err := c.QuickAdd(memory.ScopeProject, note); err != nil {
+			c.notice("memory: " + err.Error())
+		} else {
+			c.notice("remembered → " + path)
+		}
 	case strings.HasPrefix(trimmed, "/mcp__"):
 		c.runGuarded(func(ctx context.Context) error {
 			sent, found, err := c.MCPPrompt(ctx, trimmed)
@@ -365,6 +391,34 @@ func (c *Controller) Close() {
 		c.cleanup()
 	}
 }
+
+// --- memory ---
+
+// QuickAdd persists a one-line note to the doc-memory file for scope (the
+// project REASONIX.md by default) and queues it for injection on the next turn,
+// so it takes effect this session without disturbing the cache-stable system
+// prefix. Returns the file written. A nil memory set (memory disabled) is a
+// no-op returning "".
+func (c *Controller) QuickAdd(scope memory.Scope, note string) (string, error) {
+	if c.mem == nil {
+		return "", nil
+	}
+	path := c.mem.DocPath(scope)
+	if path == "" {
+		return "", fmt.Errorf("no target file for memory scope %q", scope)
+	}
+	if err := memory.AppendDoc(path, note); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	c.pendingMemory = append(c.pendingMemory, note)
+	c.mu.Unlock()
+	return path, nil
+}
+
+// Memory returns the loaded memory set (nil when memory is disabled), for
+// frontends that surface a memory panel or the /memory command.
+func (c *Controller) Memory() *memory.Set { return c.mem }
 
 // --- approval bridge (agent gate → events) ---
 
