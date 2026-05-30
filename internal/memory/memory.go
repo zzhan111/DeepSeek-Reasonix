@@ -70,6 +70,47 @@ func (s *Set) Empty() bool {
 	return s == nil || (len(s.Docs) == 0 && strings.TrimSpace(s.Index) == "")
 }
 
+// docScopes are the scopes the panel can target for a quick-add or a new doc.
+// Ordered broad → specific for display.
+var docScopes = []Scope{ScopeUser, ScopeProject, ScopeLocal}
+
+// allowedDocPaths is the closed set of files WriteDoc / AppendDoc may touch: the
+// canonical file for each writable scope, plus every doc already discovered this
+// session (so an ancestor or AGENTS.md the user is already editing stays
+// editable). Keyed by absolute path. This bounds frontend-driven writes to real
+// memory files rather than arbitrary paths.
+func (s *Set) allowedDocPaths() map[string]bool {
+	allow := map[string]bool{}
+	for _, sc := range docScopes {
+		if p := s.DocPath(sc); p != "" {
+			allow[absOf(p)] = true
+		}
+	}
+	for _, d := range s.Docs {
+		allow[absOf(d.Path)] = true
+	}
+	return allow
+}
+
+// WriteDoc overwrites a doc-memory file with body, after checking path is a
+// recognized memory file (see allowedDocPaths). It is the save side of the
+// desktop panel's in-place editor. The write lands on disk immediately but does
+// NOT mutate the cache-stable system prefix — the edit folds into the prefix on
+// the next session; to make it apply this session, the controller separately
+// queues a turn-tail note. Returns the path written.
+func (s *Set) WriteDoc(path, body string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("memory unavailable")
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("no path given")
+	}
+	if !s.allowedDocPaths()[absOf(path)] {
+		return "", fmt.Errorf("refusing to write %q: not a recognized memory file", path)
+	}
+	return path, writeDocFile(path, body)
+}
+
 // Block renders the memory as a single Markdown section, or "" when empty. It is
 // deterministic given the same files, which is what keeps it a stable cache
 // prefix across sessions that don't change their memory.

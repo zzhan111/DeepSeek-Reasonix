@@ -26,9 +26,11 @@ export interface AppBindings {
   ContextUsage(): Promise<ContextInfo>;
   Meta(): Promise<Meta>;
   // Memory panel: read the loaded REASONIX.md hierarchy + saved auto-memories,
-  // and quick-add a note to the project REASONIX.md (≡ typing "#<note>").
+  // quick-add a note to a scope's REASONIX.md (≡ "#<note>"), and overwrite a doc
+  // from the in-place editor.
   Memory(): Promise<MemoryView>;
-  Remember(note: string): Promise<string>;
+  Remember(scope: string, note: string): Promise<string>;
+  SaveDoc(path: string, body: string): Promise<string>;
 }
 
 interface WailsRuntime {
@@ -158,7 +160,12 @@ function makeMockApp(): AppBindings {
           {
             path: "REASONIX.md",
             scope: "project",
-            body: "# Reasonix project memory\n\nMock doc shown in the browser dev seam.",
+            body: "# Reasonix project memory\n\nMock doc shown in the browser dev seam.\n\n## Notes\n\n- prefers concise replies",
+          },
+          {
+            path: "~/.config/reasonix/REASONIX.md",
+            scope: "user",
+            body: "# User memory\n\nAlways respond in 中文.",
           },
         ],
         facts: [
@@ -169,11 +176,20 @@ function makeMockApp(): AppBindings {
             body: "Indent with tabs.",
           },
         ],
+        scopes: [
+          { scope: "user", path: "~/.config/reasonix/REASONIX.md" },
+          { scope: "project", path: "REASONIX.md" },
+          { scope: "local", path: "REASONIX.local.md" },
+        ],
       };
     },
-    async Remember(note: string) {
-      emit({ kind: "notice", level: "info", text: "remembered → REASONIX.md" });
-      return `REASONIX.md (mock): ${note}`;
+    async Remember(scope: string, note: string) {
+      emit({ kind: "notice", level: "info", text: `remembered → ${scope}` });
+      return `${scope} REASONIX.md (mock): ${note}`;
+    },
+    async SaveDoc(path: string, _body: string) {
+      emit({ kind: "notice", level: "info", text: `saved → ${path}` });
+      return path;
     },
     async Meta() {
       return {

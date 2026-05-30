@@ -393,13 +393,19 @@ func (c *Controller) Close() {
 }
 
 // --- memory ---
+//
+// c.mem is treated as an immutable snapshot guarded by c.mu: reads take the lock
+// and return the pointer; writes mutate disk then swap in a freshly discovered
+// snapshot. A turn-tail note is queued for each write so the change applies this
+// session without disturbing the cache-stable system prefix (it folds into the
+// prefix on the next session). All of these are no-ops returning "" when memory
+// is disabled.
 
-// QuickAdd persists a one-line note to the doc-memory file for scope (the
-// project REASONIX.md by default) and queues it for injection on the next turn,
-// so it takes effect this session without disturbing the cache-stable system
-// prefix. Returns the file written. A nil memory set (memory disabled) is a
-// no-op returning "".
+// QuickAdd appends a one-line note to the doc-memory file for scope (project
+// REASONIX.md by default) — the write side of "#<note>". Returns the file written.
 func (c *Controller) QuickAdd(scope memory.Scope, note string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.mem == nil {
 		return "", nil
 	}
@@ -410,15 +416,50 @@ func (c *Controller) QuickAdd(scope memory.Scope, note string) (string, error) {
 	if err := memory.AppendDoc(path, note); err != nil {
 		return "", err
 	}
-	c.mu.Lock()
 	c.pendingMemory = append(c.pendingMemory, note)
-	c.mu.Unlock()
+	c.refreshMemoryLocked()
 	return path, nil
 }
 
-// Memory returns the loaded memory set (nil when memory is disabled), for
-// frontends that surface a memory panel or the /memory command.
-func (c *Controller) Memory() *memory.Set { return c.mem }
+// SaveDoc overwrites a recognized memory doc with body — the save side of the
+// desktop panel's in-place editor. Returns the file written.
+func (c *Controller) SaveDoc(path, body string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mem == nil {
+		return "", nil
+	}
+	written, err := c.mem.WriteDoc(path, body)
+	if err != nil {
+		return "", err
+	}
+	// Inject the new content once on the next turn: the cached prefix still holds
+	// the pre-edit version this session, so handing the model the current text
+	// avoids a stale-guidance gap until the next session re-folds it into the
+	// prefix. Trimmed to a single tail note (drained by Compose), not per-turn.
+	c.pendingMemory = append(c.pendingMemory,
+		"Memory file "+written+" was just edited. Its current contents:\n"+strings.TrimSpace(body))
+	c.refreshMemoryLocked()
+	return written, nil
+}
+
+// Memory returns the loaded memory snapshot (nil when memory is disabled), for
+// frontends that surface a memory panel or the /memory command. The returned
+// *Set is immutable — mutations go through QuickAdd / SaveDoc.
+func (c *Controller) Memory() *memory.Set {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mem
+}
+
+// refreshMemoryLocked re-discovers memory from disk so a later Memory() reflects
+// a just-applied write. Caller holds c.mu.
+func (c *Controller) refreshMemoryLocked() {
+	if c.mem == nil {
+		return
+	}
+	c.mem = memory.Load(memory.Options{CWD: c.mem.CWD, UserDir: c.mem.UserDir})
+}
 
 // --- approval bridge (agent gate → events) ---
 

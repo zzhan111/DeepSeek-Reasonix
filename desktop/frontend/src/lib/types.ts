@@ -84,9 +84,16 @@ export interface MemoryFact {
   body: string;
 }
 
+// MemoryScope is one writable quick-add target (scope id + the file it writes to).
+export interface MemoryScope {
+  scope: string; // "user" | "project" | "local"
+  path: string;
+}
+
 export interface MemoryView {
   docs: MemoryDoc[];
   facts: MemoryFact[];
+  scopes: MemoryScope[];
   storeDir: string;
   available: boolean;
 }

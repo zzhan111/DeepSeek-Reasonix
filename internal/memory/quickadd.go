@@ -45,6 +45,19 @@ func AppendDoc(path, note string) error {
 	return os.WriteFile(path, []byte(out), 0o644)
 }
 
+// writeDocFile overwrites path with body, creating the parent directory and
+// ensuring a single trailing newline. Used by Set.WriteDoc for the panel's
+// in-place editor (path validation happens in the caller).
+func writeDocFile(path, body string) error {
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	out := strings.TrimRight(body, "\n") + "\n"
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
 // insertUnderHeading appends bullet to the end of the section started by heading
 // — just before the next "## "/"# " heading, or at end of file if none follows.
 func insertUnderHeading(body, heading, bullet string) string {
